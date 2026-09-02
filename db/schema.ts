@@ -67,6 +67,17 @@ export const catalogGroups = sqliteTable('catalog_groups', {
   syncedAt: text('synced_at'),
 });
 
+export const catalogGroupLanguages = sqliteTable(
+  'catalog_group_languages',
+  {
+    groupId: integer('group_id')
+      .primaryKey()
+      .references(() => catalogGroups.groupId, { onDelete: 'cascade' }),
+    language: text('language', { enum: ['en', 'ja'] }).notNull(),
+  },
+  (table) => [index('idx_catalog_group_languages_language').on(table.language)],
+);
+
 export const catalogCards = sqliteTable(
   'catalog_cards',
   {

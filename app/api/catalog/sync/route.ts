@@ -9,18 +9,24 @@ import {
   getTcgCsvGroups,
 } from '@/lib/tcgcsv';
 
-const GROUPS_PER_REQUEST = 3;
+const GROUPS_PER_REQUEST = 5;
+type Language = 'en' | 'ja';
+
+function categoryId(language: Language) {
+  return language === 'ja' ? 85 : 3;
+}
 
 async function authorized() {
   const user = await getChatGPTUser();
   return Boolean(user || process.env.NODE_ENV !== 'production');
 }
 
-async function importGroups(resetSynced: boolean) {
-  const groups = await getTcgCsvGroups();
+async function importGroups(language: Language, resetSynced: boolean) {
+  const groups = await getTcgCsvGroups(categoryId(language));
   for (let offset = 0; offset < groups.length; offset += 50) {
+    const slice = groups.slice(offset, offset + 50);
     await env.DB.batch(
-      groups.slice(offset, offset + 50).map((group) =>
+      slice.map((group) =>
         env.DB.prepare(
           `INSERT INTO catalog_groups (group_id, name, abbreviation, published_on, source_modified_on, synced_at)
            VALUES (?, ?, ?, ?, ?, NULL)
@@ -37,22 +43,36 @@ async function importGroups(resetSynced: boolean) {
         ),
       ),
     );
+    await env.DB.batch(
+      slice.map((group) =>
+        env.DB.prepare(
+          `INSERT INTO catalog_group_languages (group_id, language) VALUES (?, ?)
+           ON CONFLICT(group_id) DO UPDATE SET language = excluded.language`,
+        ).bind(group.groupId, language),
+      ),
+    );
   }
 }
 
-async function initializeGroups() {
+async function initializeGroups(language: Language) {
   const count = await env.DB.prepare(
-    'SELECT count(*) AS count FROM catalog_groups',
-  ).first<{ count: number }>();
+    'SELECT count(*) AS count FROM catalog_group_languages WHERE language = ?',
+  )
+    .bind(language)
+    .first<{ count: number }>();
   if (Number(count?.count)) return;
-  await importGroups(false);
+  await importGroups(language, false);
 }
 
-async function syncGroup(groupId: number) {
-  const { products, prices } = await getTcgCsvGroup(groupId);
+async function syncGroup(language: Language, groupId: number) {
+  const { products, prices } = await getTcgCsvGroup(
+    categoryId(language),
+    groupId,
+  );
   const cards = products.flatMap((product) => {
     const number = extendedValue(product, 'Number');
-    return number ? [{ ...product, number }] : [];
+    const rarity = extendedValue(product, 'Rarity');
+    return number || rarity ? [{ ...product, number: number ?? '' }] : [];
   });
   const cardIds = new Set(cards.map((card) => card.productId));
   const cardPrices = prices.filter((price) => cardIds.has(price.productId));
@@ -107,7 +127,7 @@ async function syncGroup(groupId: number) {
     .run();
 }
 
-async function refreshCollectionValues() {
+async function refreshCollectionValues(language: Language) {
   const now = new Date().toISOString();
   await env.DB.prepare(
     `UPDATE inventory
@@ -116,7 +136,7 @@ async function refreshCollectionValues() {
        WHERE p.product_id = CAST(substr(inventory.external_id, 11) AS INTEGER)
          AND lower(replace(p.finish, ' ', '')) = lower(replace(inventory.finish, ' ', ''))
      ), price_updated_at = ?
-     WHERE language = 'en' AND external_id LIKE 'tcgplayer:%'
+     WHERE language = ? AND external_id LIKE 'tcgplayer:%'
        AND EXISTS (
          SELECT 1 FROM catalog_prices p
          WHERE p.product_id = CAST(substr(inventory.external_id, 11) AS INTEGER)
@@ -124,56 +144,87 @@ async function refreshCollectionValues() {
            AND p.market_price_cents IS NOT NULL
        )`,
   )
-    .bind(now)
+    .bind(now, language)
     .run();
   await env.DB.prepare(
     `INSERT INTO price_history (id, inventory_id, value_cents, captured_on)
      SELECT lower(hex(randomblob(16))), id,
        coalesce(manual_value_cents, market_price_cents), date('now')
      FROM inventory
-     WHERE coalesce(manual_value_cents, market_price_cents) IS NOT NULL
+     WHERE language = ?
+       AND coalesce(manual_value_cents, market_price_cents) IS NOT NULL
      ON CONFLICT(inventory_id, captured_on)
      DO UPDATE SET value_cents = excluded.value_cents`,
-  ).run();
+  )
+    .bind(language)
+    .run();
 }
 
-export async function POST() {
+export async function POST(request: Request) {
   if (!(await authorized()))
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   try {
+    const body = (await request.json().catch(() => ({}))) as {
+      language?: unknown;
+      restart?: unknown;
+    };
+    const language: Language = body.language === 'ja' ? 'ja' : 'en';
     await ensureDatabase();
-    await initializeGroups();
+    await initializeGroups(language);
+    if (body.restart === true)
+      await env.DB.prepare(
+        `UPDATE catalog_groups SET synced_at = NULL
+         WHERE group_id IN (
+           SELECT group_id FROM catalog_group_languages WHERE language = ?
+         )`,
+      )
+        .bind(language)
+        .run();
     let pending = await env.DB.prepare(
-      `SELECT group_id FROM catalog_groups WHERE synced_at IS NULL
-       ORDER BY published_on DESC, group_id DESC LIMIT ?`,
+      `SELECT g.group_id FROM catalog_groups g
+       JOIN catalog_group_languages l ON l.group_id = g.group_id
+       WHERE l.language = ? AND g.synced_at IS NULL
+       ORDER BY g.published_on DESC, g.group_id DESC LIMIT ?`,
     )
-      .bind(GROUPS_PER_REQUEST)
+      .bind(language, GROUPS_PER_REQUEST)
       .all<{ group_id: number }>();
     if (!pending.results.length) {
       const age = await env.DB.prepare(
-        `SELECT min(synced_at) AS oldest FROM catalog_groups`,
-      ).first<{ oldest: string | null }>();
+        `SELECT min(g.synced_at) AS oldest FROM catalog_groups g
+         JOIN catalog_group_languages l ON l.group_id = g.group_id
+         WHERE l.language = ?`,
+      )
+        .bind(language)
+        .first<{ oldest: string | null }>();
       const weekAgo = Date.now() - 7 * 24 * 60 * 60 * 1000;
       if (!age?.oldest || new Date(age.oldest).getTime() < weekAgo) {
-        await importGroups(true);
+        await importGroups(language, true);
         pending = await env.DB.prepare(
-          `SELECT group_id FROM catalog_groups WHERE synced_at IS NULL
-           ORDER BY published_on DESC, group_id DESC LIMIT ?`,
+          `SELECT g.group_id FROM catalog_groups g
+           JOIN catalog_group_languages l ON l.group_id = g.group_id
+           WHERE l.language = ? AND g.synced_at IS NULL
+           ORDER BY g.published_on DESC, g.group_id DESC LIMIT ?`,
         )
-          .bind(GROUPS_PER_REQUEST)
+          .bind(language, GROUPS_PER_REQUEST)
           .all<{ group_id: number }>();
       }
     }
-    for (const group of pending.results) await syncGroup(group.group_id);
+    for (const group of pending.results)
+      await syncGroup(language, group.group_id);
 
     const status = await env.DB.prepare(
       `SELECT count(*) AS total,
-       sum(CASE WHEN synced_at IS NOT NULL THEN 1 ELSE 0 END) AS completed
-       FROM catalog_groups`,
-    ).first<{ total: number; completed: number }>();
+       sum(CASE WHEN g.synced_at IS NOT NULL THEN 1 ELSE 0 END) AS completed
+       FROM catalog_groups g
+       JOIN catalog_group_languages l ON l.group_id = g.group_id
+       WHERE l.language = ?`,
+    )
+      .bind(language)
+      .first<{ total: number; completed: number }>();
     const total = Number(status?.total ?? 0);
     const completed = Number(status?.completed ?? 0);
-    if (total > 0 && completed === total) await refreshCollectionValues();
+    if (total > 0 && completed === total)
+      await refreshCollectionValues(language);
     return NextResponse.json({
       total,
       completed,

@@ -61,10 +61,13 @@ export function AddCardDialog({
         error?: string;
         needsSync?: boolean;
       };
-      if (response.status === 409 && data.needsSync && language === 'en') {
-        for (let step = 0; step < 100; step += 1) {
+      if (response.status === 409 && data.needsSync) {
+        let remaining = 1;
+        for (let step = 0; step < 120; step += 1) {
           const syncResponse = await fetch('/api/catalog/sync', {
             method: 'POST',
+            headers: { 'content-type': 'application/json' },
+            body: JSON.stringify({ language }),
           });
           const sync = (await syncResponse.json()) as {
             total?: number;
@@ -78,8 +81,13 @@ export function AddCardDialog({
             completed: sync.completed ?? 0,
             total: sync.total ?? 0,
           });
+          remaining = sync.remaining ?? 0;
           if (!sync.remaining) break;
         }
+        if (remaining)
+          throw new Error(
+            'The catalog is still downloading. Search again to resume it.',
+          );
         response = await fetch(searchUrl);
         data = (await response.json()) as {
           cards?: CatalogCard[];
@@ -93,7 +101,7 @@ export function AddCardDialog({
       if (!cards.length)
         setError(
           language === 'ja'
-            ? 'No matches. Japanese searches work best with the Japanese card name.'
+            ? 'No matching Japanese cards found. TCGplayer uses English card names.'
             : 'No matching cards found.',
         );
     } catch (caught) {
@@ -239,7 +247,7 @@ export function AddCardDialog({
                       onChange={(e) => setQuery(e.target.value)}
                       placeholder={
                         language === 'ja'
-                          ? 'ピカチュウ…'
+                          ? 'Pikachu, Charizard…'
                           : 'Charizard, Pikachu…'
                       }
                       aria-label="Card name"

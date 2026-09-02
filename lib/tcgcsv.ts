@@ -1,4 +1,4 @@
-const BASE_URL = 'https://tcgcsv.com/tcgplayer/3';
+const BASE_URL = 'https://tcgcsv.com/tcgplayer';
 const REQUEST_HEADERS = {
   'User-Agent': 'Pokemon-TCG-Value-Vault/0.1.0',
   Accept: 'application/json',
@@ -59,15 +59,17 @@ async function getJson<T>(url: string) {
   throw new Error('TCGCSV did not respond after three attempts');
 }
 
-export function getTcgCsvGroups() {
-  return getJson<TcgCsvGroup>(`${BASE_URL}/groups`);
+export function getTcgCsvGroups(categoryId: number) {
+  return getJson<TcgCsvGroup>(`${BASE_URL}/${categoryId}/groups`);
 }
 
-export async function getTcgCsvGroup(groupId: number) {
+export async function getTcgCsvGroup(categoryId: number, groupId: number) {
   const products = await getJson<TcgCsvProduct>(
-    `${BASE_URL}/${groupId}/products`,
+    `${BASE_URL}/${categoryId}/${groupId}/products`,
   );
-  const prices = await getJson<TcgCsvPrice>(`${BASE_URL}/${groupId}/prices`);
+  const prices = await getJson<TcgCsvPrice>(
+    `${BASE_URL}/${categoryId}/${groupId}/prices`,
+  );
   return { products, prices };
 }
 

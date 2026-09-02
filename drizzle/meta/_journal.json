@@ -15,6 +15,13 @@
       "when": 1788371340907,
       "tag": "0001_violet_sentry",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "6",
+      "when": 1788372419614,
+      "tag": "0002_tough_microchip",
+      "breakpoints": true
     }
   ]
 }

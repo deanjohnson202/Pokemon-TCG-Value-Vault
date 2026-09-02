@@ -24,6 +24,12 @@ export function ensureDatabase() {
         `CREATE TABLE IF NOT EXISTS catalog_groups (group_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, abbreviation TEXT, published_on TEXT, source_modified_on TEXT, synced_at TEXT)`,
       ),
       env.DB.prepare(
+        `CREATE TABLE IF NOT EXISTS catalog_group_languages (group_id INTEGER PRIMARY KEY NOT NULL REFERENCES catalog_groups(group_id) ON DELETE CASCADE, language TEXT NOT NULL)`,
+      ),
+      env.DB.prepare(
+        `CREATE INDEX IF NOT EXISTS idx_catalog_group_languages_language ON catalog_group_languages (language)`,
+      ),
+      env.DB.prepare(
         `CREATE TABLE IF NOT EXISTS catalog_cards (product_id INTEGER PRIMARY KEY NOT NULL, group_id INTEGER NOT NULL REFERENCES catalog_groups(group_id) ON DELETE CASCADE, name TEXT NOT NULL, search_name TEXT NOT NULL, collector_number TEXT NOT NULL, image_url TEXT, tcgplayer_url TEXT, source_modified_on TEXT)`,
       ),
       env.DB.prepare(
