@@ -37,6 +37,10 @@ export function AddCardDialog({
   const [manualValue, setManualValue] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState('');
+  const [syncProgress, setSyncProgress] = useState<{
+    completed: number;
+    total: number;
+  } | null>(null);
 
   function close() {
     setOpen(false);
@@ -50,13 +54,43 @@ export function AddCardDialog({
     setBusy(true);
     setError('');
     try {
-      const response = await fetch(
-        `/api/cards/search?q=${encodeURIComponent(query)}&language=${language}`,
-      );
-      if (!response.ok) throw new Error('Search is unavailable right now.');
-      const data = (await response.json()) as { cards: CatalogCard[] };
-      setResults(data.cards ?? []);
-      if (!data.cards?.length)
+      const searchUrl = `/api/cards/search?q=${encodeURIComponent(query)}&language=${language}`;
+      let response = await fetch(searchUrl);
+      let data = (await response.json()) as {
+        cards?: CatalogCard[];
+        error?: string;
+        needsSync?: boolean;
+      };
+      if (response.status === 409 && data.needsSync && language === 'en') {
+        for (let step = 0; step < 100; step += 1) {
+          const syncResponse = await fetch('/api/catalog/sync', {
+            method: 'POST',
+          });
+          const sync = (await syncResponse.json()) as {
+            total?: number;
+            completed?: number;
+            remaining?: number;
+            error?: string;
+          };
+          if (!syncResponse.ok)
+            throw new Error(sync.error ?? 'Could not prepare the catalog.');
+          setSyncProgress({
+            completed: sync.completed ?? 0,
+            total: sync.total ?? 0,
+          });
+          if (!sync.remaining) break;
+        }
+        response = await fetch(searchUrl);
+        data = (await response.json()) as {
+          cards?: CatalogCard[];
+          error?: string;
+        };
+      }
+      if (!response.ok)
+        throw new Error(data.error ?? 'Search is unavailable right now.');
+      const cards = data.cards ?? [];
+      setResults(cards);
+      if (!cards.length)
         setError(
           language === 'ja'
             ? 'No matches. Japanese searches work best with the Japanese card name.'
@@ -65,6 +99,7 @@ export function AddCardDialog({
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : 'Search failed.');
     } finally {
+      setSyncProgress(null);
       setBusy(false);
     }
   }
@@ -226,6 +261,14 @@ export function AddCardDialog({
                       <p className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive">
                         {error}
                       </p>
+                    )}
+                    {syncProgress && (
+                      <div className="rounded-lg bg-primary/10 p-4 text-sm text-primary">
+                        <strong>Preparing the Pokémon catalog…</strong>
+                        <span className="mt-1 block text-xs">
+                          {syncProgress.completed} of {syncProgress.total} sets
+                        </span>
+                      </div>
                     )}
                     {results.map((card) => (
                       <button

@@ -20,7 +20,26 @@ export function ensureDatabase() {
       env.DB.prepare(
         `CREATE UNIQUE INDEX IF NOT EXISTS idx_price_history_item_day ON price_history (inventory_id, captured_on)`,
       ),
+      env.DB.prepare(
+        `CREATE TABLE IF NOT EXISTS catalog_groups (group_id INTEGER PRIMARY KEY NOT NULL, name TEXT NOT NULL, abbreviation TEXT, published_on TEXT, source_modified_on TEXT, synced_at TEXT)`,
+      ),
+      env.DB.prepare(
+        `CREATE TABLE IF NOT EXISTS catalog_cards (product_id INTEGER PRIMARY KEY NOT NULL, group_id INTEGER NOT NULL REFERENCES catalog_groups(group_id) ON DELETE CASCADE, name TEXT NOT NULL, search_name TEXT NOT NULL, collector_number TEXT NOT NULL, image_url TEXT, tcgplayer_url TEXT, source_modified_on TEXT)`,
+      ),
+      env.DB.prepare(
+        `CREATE INDEX IF NOT EXISTS idx_catalog_cards_search_name ON catalog_cards (search_name)`,
+      ),
+      env.DB.prepare(
+        `CREATE INDEX IF NOT EXISTS idx_catalog_cards_group ON catalog_cards (group_id)`,
+      ),
+      env.DB.prepare(
+        `CREATE TABLE IF NOT EXISTS catalog_prices (product_id INTEGER NOT NULL REFERENCES catalog_cards(product_id) ON DELETE CASCADE, finish TEXT NOT NULL, market_price_cents INTEGER, low_price_cents INTEGER)`,
+      ),
+      env.DB.prepare(
+        `CREATE UNIQUE INDEX IF NOT EXISTS idx_catalog_prices_product_finish ON catalog_prices (product_id, finish)`,
+      ),
     ]);
+    await env.DB.prepare('PRAGMA optimize').run();
   })();
   return ready;
 }

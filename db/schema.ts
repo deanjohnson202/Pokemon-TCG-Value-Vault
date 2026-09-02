@@ -57,3 +57,50 @@ export const priceHistory = sqliteTable(
     ),
   ],
 );
+
+export const catalogGroups = sqliteTable('catalog_groups', {
+  groupId: integer('group_id').primaryKey(),
+  name: text('name').notNull(),
+  abbreviation: text('abbreviation'),
+  publishedOn: text('published_on'),
+  sourceModifiedOn: text('source_modified_on'),
+  syncedAt: text('synced_at'),
+});
+
+export const catalogCards = sqliteTable(
+  'catalog_cards',
+  {
+    productId: integer('product_id').primaryKey(),
+    groupId: integer('group_id')
+      .notNull()
+      .references(() => catalogGroups.groupId, { onDelete: 'cascade' }),
+    name: text('name').notNull(),
+    searchName: text('search_name').notNull(),
+    collectorNumber: text('collector_number').notNull(),
+    imageUrl: text('image_url'),
+    tcgplayerUrl: text('tcgplayer_url'),
+    sourceModifiedOn: text('source_modified_on'),
+  },
+  (table) => [
+    index('idx_catalog_cards_search_name').on(table.searchName),
+    index('idx_catalog_cards_group').on(table.groupId),
+  ],
+);
+
+export const catalogPrices = sqliteTable(
+  'catalog_prices',
+  {
+    productId: integer('product_id')
+      .notNull()
+      .references(() => catalogCards.productId, { onDelete: 'cascade' }),
+    finish: text('finish').notNull(),
+    marketPriceCents: integer('market_price_cents'),
+    lowPriceCents: integer('low_price_cents'),
+  },
+  (table) => [
+    uniqueIndex('idx_catalog_prices_product_finish').on(
+      table.productId,
+      table.finish,
+    ),
+  ],
+);
